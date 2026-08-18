@@ -1,10 +1,9 @@
 # Maintainer: Jackey <jfdnet@users.noreply.github.com>
-# Contributor: Jackey
 
 pkgname=omarchy-auto-theme
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="Auto-switch Omarchy light/dark theme by sunrise/sunset"
+pkgdesc="Auto-switch Omarchy light/dark theme by sunrise/sunset (NOAA solar algorithm)"
 arch=('any')
 url="https://github.com/jfdnet/omarchy-auto-theme"
 license=('MIT')
@@ -14,10 +13,10 @@ optdepends=(
     'python-gobject: geoclue automatic location'
     'geoclue: geoclue automatic location'
 )
-source=("$pkgname-$pkgver.tar.gz")
-sha256sums=('SKIP')
+source=("https://github.com/jfdnet/omarchy-auto-theme/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed')
 
 package() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir/omarchy-auto-theme-$pkgver"
     make DESTDIR="$pkgdir" PREFIX=/usr install
 }
