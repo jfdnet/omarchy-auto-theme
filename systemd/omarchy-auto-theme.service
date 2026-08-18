@@ -1,0 +1,8 @@
+[Unit]
+Description=Auto-switch Omarchy light/dark theme by sunrise/sunset
+
+[Service]
+Type=oneshot
+# omarchy in /usr/bin, script in /usr/local/bin
+Environment=PATH=/usr/local/bin:/usr/bin:/home/%u/.local/bin
+ExecStart=/usr/local/bin/omarchy-auto-theme

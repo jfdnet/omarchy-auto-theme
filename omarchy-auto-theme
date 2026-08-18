@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""
+omarchy-auto-theme — 按日出日落自动切换 Omarchy 明暗主题
+
+定位来源 (按优先级):
+  1. 配置文件坐标 (~/.config/omarchy-auto-theme.json 的 lat/lon)
+  2. 缓存坐标 (~/.local/state/omarchy-auto-theme-location.json)
+  3. geoclue 系统定位 (首次会弹一次授权窗口)
+  4. 内置回退坐标
+
+用法:
+  omarchy-auto-theme          检查并切换主题 (供 systemd timer 调用)
+  omarchy-auto-theme --locate 强制重新定位 (更新缓存坐标)
+"""
+
+import datetime
+import json
+import math
+import os
+import subprocess
+import sys
+
+# ===== 默认配置 (可用 ~/.config/omarchy-auto-theme.json 覆盖) =====
+DEFAULT_CONFIG = {
+    "fallback_lat": 22.3185,   # geoclue 不可用且无缓存时使用
+    "fallback_lon": 114.1755,
+    "light_theme": "Catppuccin Latte",
+    "dark_theme": "Tokyo Night",
+}
+
+CONFIG_PATHS = [
+    os.path.expanduser("~/.config/omarchy-auto-theme.json"),
+    "/etc/omarchy-auto-theme.json",
+]
+
+LOG_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme.log")
+LOCATION_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme-location.json")
+STATE_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme.state")
+
+
+def load_config() -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    for path in CONFIG_PATHS:
+        try:
+            with open(path) as f:
+                user = json.load(f)
+            if isinstance(user, dict):
+                cfg.update({k: v for k, v in user.items() if k in cfg or k in ("lat", "lon")})
+        except (OSError, ValueError):
+            continue
+    return cfg
+
+
+def log(msg: str) -> None:
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    try:
+        with open(LOG_FILE, "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+# ---- geoclue 定位 (一次性, 缓存结果) ----
+def geoclue_locate() -> tuple | None:
+    """通过 geoclue 获取坐标, 返回 (lat, lon, accuracy) 或 None"""
+    try:
+        import dbus
+        import dbus.mainloop.glib
+        from gi.repository import GLib
+
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SystemBus()
+
+        mgr = bus.get_object("org.freedesktop.GeoClue2",
+                             "/org/freedesktop/GeoClue2/Manager")
+        mgr_iface = dbus.Interface(mgr, "org.freedesktop.GeoClue2.Manager")
+        client_path = str(mgr_iface.GetClient())
+        client = bus.get_object("org.freedesktop.GeoClue2", client_path)
+        props = dbus.Interface(client, "org.freedesktop.DBus.Properties")
+        iface = "org.freedesktop.GeoClue2.Client"
+        props.Set(iface, "DesktopId", "omarchy-auto-theme")
+        props.Set(iface, "RequestedAccuracyLevel", dbus.UInt32(8))
+
+        result = {}
+        loop = GLib.MainLoop()
+
+        def on_update(old, new):
+            try:
+                loc = bus.get_object("org.freedesktop.GeoClue2", str(new))
+                lp = dbus.Interface(loc, "org.freedesktop.DBus.Properties")
+                lat = float(lp.Get("org.freedesktop.GeoClue2.Location", "Latitude"))
+                lon = float(lp.Get("org.freedesktop.GeoClue2.Location", "Longitude"))
+                acc = float(lp.Get("org.freedesktop.GeoClue2.Location", "Accuracy"))
+                result["loc"] = (lat, lon, acc)
+            except Exception:
+                pass
+            loop.quit()
+
+        client_iface = dbus.Interface(client, iface)
+        client_iface.connect_to_signal("LocationUpdated", on_update)
+        client_iface.Start()
+
+        GLib.timeout_add(25000, loop.quit)
+        loop.run()
+        return result.get("loc")
+    except Exception as e:
+        log(f"geoclue 定位失败: {e}")
+        return None
+
+
+def load_location() -> tuple | None:
+    try:
+        with open(LOCATION_FILE) as f:
+            d = json.load(f)
+            if "lat" in d and "lon" in d:
+                return (float(d["lat"]), float(d["lon"]), d.get("acc", 0))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def save_location(lat, lon, acc):
+    try:
+        with open(LOCATION_FILE, "w") as f:
+            json.dump({"lat": lat, "lon": lon, "acc": acc,
+                       "time": datetime.datetime.now().isoformat()}, f)
+    except OSError as e:
+        log(f"保存坐标失败: {e}")
+
+
+# ---- NOAA 日出日落算法 ----
+def sunrise_sunset_utc_minutes(lat, lon, day_of_year):
+    gamma = 2 * math.pi / 365 * (day_of_year - 1)
+    eqtime = 229.18 * (
+        0.000075 + 0.001868 * math.cos(gamma) - 0.032077 * math.sin(gamma)
+        - 0.014615 * math.cos(2 * gamma) - 0.040849 * math.sin(2 * gamma)
+    )
+    decl = (
+        0.006918 - 0.399912 * math.cos(gamma) + 0.070257 * math.sin(gamma)
+        - 0.006758 * math.cos(2 * gamma) + 0.000907 * math.sin(2 * gamma)
+        - 0.002697 * math.cos(3 * gamma) + 0.00148 * math.sin(3 * gamma)
+    )
+    lat_rad = math.radians(lat)
+    cos_ha = math.cos(math.radians(90.833)) / (math.cos(lat_rad) * math.cos(decl)) - math.tan(lat_rad) * math.tan(decl)
+    cos_ha = max(-1.0, min(1.0, cos_ha))
+    ha = math.degrees(math.acos(cos_ha))
+    return 720 - 4 * (lon + ha) - eqtime, 720 - 4 * (lon - ha) - eqtime
+
+
+def local_sun_times(lat, lon, dt):
+    doy = dt.timetuple().tm_yday
+    sr, ss = sunrise_sunset_utc_minutes(lat, lon, doy)
+    day_utc = datetime.datetime.fromisoformat(dt.date().isoformat() + "T00:00:00Z")
+    return (day_utc + datetime.timedelta(minutes=sr)).astimezone(), \
+           (day_utc + datetime.timedelta(minutes=ss)).astimezone()
+
+
+# ---- 主题 ----
+def current_theme_mode():
+    try:
+        r = subprocess.run(["omarchy", "theme", "color", "mode"],
+                           capture_output=True, text=True, timeout=15)
+        if r.stdout.strip() in ("light", "dark"):
+            return r.stdout.strip()
+    except Exception as e:
+        log(f"读取主题失败: {e}")
+    return "unknown"
+
+
+def main():
+    cfg = load_config()
+
+    if "--locate" in sys.argv:
+        log("强制重新定位...")
+        loc = geoclue_locate()
+        if loc:
+            save_location(*loc)
+            log(f"坐标已更新: lat={loc[0]:.4f} lon={loc[1]:.4f} 精度={loc[2]:.0f}m")
+        else:
+            log("定位失败, 保留原坐标")
+        return
+
+    # 坐标优先级: 配置 > 缓存 > geoclue > 回退
+    loc = None
+    if "lat" in cfg and "lon" in cfg:
+        loc = (float(cfg["lat"]), float(cfg["lon"]), 0)
+        log(f"使用配置坐标 {loc[0]:.4f},{loc[1]:.4f}")
+    if not loc:
+        loc = load_location()
+        if loc:
+            log(f"使用缓存坐标 {loc[0]:.4f},{loc[1]:.4f} (精度{loc[2]:.0f}m)")
+    if not loc:
+        log("无坐标, 尝试 geoclue 定位 (如弹出授权窗口请点 Allow)...")
+        loc = geoclue_locate()
+        if loc:
+            save_location(*loc)
+            log(f"geoclue 定位: lat={loc[0]:.4f} lon={loc[1]:.4f} 精度={loc[2]:.0f}m")
+        else:
+            loc = (cfg["fallback_lat"], cfg["fallback_lon"], 0)
+            log(f"回退到内置坐标 {loc[0]:.4f},{loc[1]:.4f}")
+
+    lat, lon, acc = loc
+    now = datetime.datetime.now().astimezone()
+    sunrise, sunset = local_sun_times(lat, lon, now)
+    is_day = sunrise <= now <= sunset
+    desired_mode = "light" if is_day else "dark"
+    target = cfg["light_theme"] if is_day else cfg["dark_theme"]
+
+    cur_mode = current_theme_mode()
+    state = ""
+    try:
+        with open(STATE_FILE) as f:
+            state = f.read().strip()
+    except OSError:
+        pass
+
+    log(f"坐标 {lat:.4f},{lon:.4f} (精度{acc:.0f}m) | 日出 {sunrise:%H:%M} 日落 {sunset:%H:%M} "
+        f"| 现在={'白天' if is_day else '夜晚'} 当前={cur_mode} 状态={state or '-'}")
+
+    if cur_mode == "unknown":
+        return
+
+    if cur_mode != desired_mode and state != desired_mode:
+        log(f"切换主题: {target} ({desired_mode})")
+        r = subprocess.run(["omarchy", "theme", "set", target],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            with open(STATE_FILE, "w") as f:
+                f.write(desired_mode)
+            log("切换完成")
+        else:
+            log(f"切换失败: {r.stderr.strip()[:200]}")
+
+
+if __name__ == "__main__":
+    main()
