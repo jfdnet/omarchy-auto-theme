@@ -1,10 +1,8 @@
 [Unit]
-Description=Check and switch Omarchy theme by sunrise/sunset (every 10 min)
+Description=Check and switch Omarchy theme by sunrise/sunset (once per login)
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=10min
-Persistent=true
 
 [Install]
 WantedBy=timers.target

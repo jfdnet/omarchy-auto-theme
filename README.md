@@ -3,14 +3,35 @@
 按日出日落自动切换 Omarchy 明暗主题。
 
 白天使用浅色主题, 夜晚使用深色主题。基于 NOAA 太阳算法计算每天的真实日出日落时间,
-由 systemd 用户定时器每 10 分钟检查一次(仅在明暗变化时切换, 每天最多 2 次)。
+由 systemd 用户定时器、hypridle 钩子与日出日落边界定时触发, 仅在明暗不一致时切换主题。
+
+## 触发时机
+
+| 时机 | 机制 |
+|------|------|
+| 登录进入桌面 | systemd 用户定时器 (`OnBootSec=1min`) |
+| 屏幕解锁 | hypridle `on_unlock_cmd` |
+| 唤醒(休眠恢复) | hypridle `after_sleep_cmd` |
+| 日出/日落边界 | 脚本自安排的 systemd 临时定时器 (`systemd-run --on-calendar`) |
+
+脚本每次运行都会在下一个日出/日落边界安排一次强制切换, 即使长时间不锁屏、不休眠, 主题也会在日出日落时准时刷新。
+
+解锁与唤醒依赖 hypridle 钩子, 在 `~/.config/hypr/hypridle.conf` 的 `general` 段加入:
+
+```ini
+general {
+    on_unlock_cmd = /usr/local/bin/omarchy-auto-theme
+    after_sleep_cmd = hyprctl dispatch 'hl.dsp.dpms("on")'; /usr/local/bin/omarchy-auto-theme
+}
+```
 
 ## 特性
 
 - 🌅 按真实日出/日落时间切换(每天不同, 自动计算)
-- 🎨 白天/夜晚主题可配置(默认 Catppuccin Latte / Tokyo Night)
-- 📍 多种定位方式: 手动坐标 > geoclue 系统定位 > IP 回退
-- 🔁 幂等切换(状态文件防抖, 不重复触发)
+- 🎨 白天/夜晚主题可配置(默认 Milkmatcha Light / City 783)
+- ✍️ 手动更改主题会被采纳为新默认 (light/dark 分别记忆)
+- 📍 多种定位方式: 配置坐标 > 缓存 > geoclue > 固定时间回退
+- 🔁 幂等切换(仅明暗不一致时切换)
 - 📝 完整日志(`~/.local/state/omarchy-auto-theme.log`)
 
 ## 安装
@@ -38,12 +59,12 @@ systemctl --user enable --now omarchy-auto-theme.timer
 {
   "lat": 39.9042,             // 手动指定纬度 (可选, 推荐)
   "lon": 116.4074,            // 手动指定经度 (可选, 推荐)
-  "fallback_lat": 22.3185,    // geoclue 不可用时的回退坐标
-  "fallback_lon": 114.1755,
-  "light_theme": "Catppuccin Latte",
-  "dark_theme": "Tokyo Night"
+  "light_theme": "Milkmatcha Light",
+  "dark_theme": "City 783"
 }
 ```
+
+手动更改主题时, 脚本会自动把你选择的主题写入该配置文件, 作为新的 `light_theme` 或 `dark_theme` 默认。
 
 ### 定位方式
 
@@ -52,7 +73,7 @@ systemctl --user enable --now omarchy-auto-theme.timer
 | 1 | 配置文件 `lat`/`lon` | 最准确, 推荐手动设置 |
 | 2 | 缓存坐标 | 首次定位后自动缓存 |
 | 3 | geoclue | 系统定位服务(需安装 geoclue, 首次请求弹窗点 Allow) |
-| 4 | 内置回退坐标 | 兜底 |
+| 4 | 固定时间 08:00/20:00 | 定位失败时兜底 |
 
 强制重新定位:
 
@@ -85,7 +106,7 @@ omarchy-auto-theme --locate
 /etc/omarchy-auto-theme.json.example       # 配置示例
 ```
 
-日志与状态: `~/.local/state/omarchy-auto-theme.*`
+日志与坐标缓存: `~/.local/state/omarchy-auto-theme.log` / `-location.json`
 
 ## License
 

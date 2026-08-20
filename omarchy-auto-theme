@@ -6,7 +6,7 @@ omarchy-auto-theme — 按日出日落自动切换 Omarchy 明暗主题
   1. 配置文件坐标 (~/.config/omarchy-auto-theme.json 的 lat/lon)
   2. 缓存坐标 (~/.local/state/omarchy-auto-theme-location.json)
   3. geoclue 系统定位 (首次会弹一次授权窗口)
-  4. 内置回退坐标
+  4. 固定时间 08:00 / 20:00 (定位失败时的回退)
 
 用法:
   omarchy-auto-theme          检查并切换主题 (供 systemd timer 调用)
@@ -22,11 +22,13 @@ import sys
 
 # ===== 默认配置 (可用 ~/.config/omarchy-auto-theme.json 覆盖) =====
 DEFAULT_CONFIG = {
-    "fallback_lat": 22.3185,   # geoclue 不可用且无缓存时使用
-    "fallback_lon": 114.1755,
-    "light_theme": "Catppuccin Latte",
-    "dark_theme": "Tokyo Night",
+    "light_theme": "Milkmatcha Light",
+    "dark_theme": "City 783",
 }
+
+# 定位失败时的固定切换时间 (时)
+FALLBACK_LIGHT_HOUR = 8
+FALLBACK_DARK_HOUR = 20
 
 CONFIG_PATHS = [
     os.path.expanduser("~/.config/omarchy-auto-theme.json"),
@@ -35,7 +37,6 @@ CONFIG_PATHS = [
 
 LOG_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme.log")
 LOCATION_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme-location.json")
-STATE_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme.state")
 
 
 def load_config() -> dict:
@@ -169,6 +170,75 @@ def current_theme_mode():
     return "unknown"
 
 
+def current_theme_name():
+    try:
+        r = subprocess.run(["omarchy", "theme", "current"],
+                           capture_output=True, text=True, timeout=15)
+        name = r.stdout.strip()
+        return name or None
+    except Exception as e:
+        log(f"读取当前主题失败: {e}")
+        return None
+
+
+def save_theme_default(mode_key: str, theme_name: str) -> None:
+    """把用户手动选择的主题写入用户配置文件, 作为脚本默认主题。"""
+    cfg = {}
+    try:
+        with open(CONFIG_PATHS[0]) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            cfg = data
+    except (OSError, ValueError):
+        pass
+    cfg[mode_key] = theme_name
+    try:
+        os.makedirs(os.path.dirname(CONFIG_PATHS[0]), exist_ok=True)
+        with open(CONFIG_PATHS[0], "w") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        log(f"已更新默认主题 {mode_key}={theme_name}")
+    except OSError as e:
+        log(f"保存默认主题失败: {e}")
+
+SCHED_PREFIX = "omarchy-auto-theme-sched-"
+
+
+def schedule_next_switch(sunrise, sunset, now):
+    """在下一个日出/日落边界安排一次强制切换 (systemd 临时定时器)。"""
+    try:
+        if now < sunrise:
+            nxt = sunrise
+        elif now < sunset:
+            nxt = sunset
+        else:
+            nxt = sunrise + datetime.timedelta(days=1)
+
+        # 清掉旧的临时定时器, 避免累积/重复触发
+        r = subprocess.run(
+            ["systemctl", "--user", "list-units", "--all", "--no-legend",
+             "--plain", "--type=timer", SCHED_PREFIX + "*"],
+            capture_output=True, text=True, timeout=10)
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if parts and parts[0].startswith(SCHED_PREFIX):
+                subprocess.run(["systemctl", "--user", "stop", parts[0]],
+                               capture_output=True, timeout=10)
+
+        spec = nxt.strftime("%Y-%m-%d %H:%M:%S")
+        unit = SCHED_PREFIX + now.strftime("%Y%m%d%H%M%S")
+        r = subprocess.run(
+            ["systemd-run", "--user", "--on-calendar", spec,
+             "--unit", unit, "/usr/local/bin/omarchy-auto-theme"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            log(f"已安排下次强制切换: {nxt:%Y-%m-%d %H:%M:%S}")
+        else:
+            log(f"安排下次切换失败: {r.stderr.strip()[:200]}")
+    except Exception as e:
+        log(f"安排切换定时器异常: {e}")
+
+
+
 def main():
     cfg = load_config()
 
@@ -182,7 +252,7 @@ def main():
             log("定位失败, 保留原坐标")
         return
 
-    # 坐标优先级: 配置 > 缓存 > geoclue > 回退
+    # 坐标优先级: 配置 > 缓存 > geoclue (失败则用固定时间)
     loc = None
     if "lat" in cfg and "lon" in cfg:
         loc = (float(cfg["lat"]), float(cfg["lon"]), 0)
@@ -197,38 +267,48 @@ def main():
         if loc:
             save_location(*loc)
             log(f"geoclue 定位: lat={loc[0]:.4f} lon={loc[1]:.4f} 精度={loc[2]:.0f}m")
-        else:
-            loc = (cfg["fallback_lat"], cfg["fallback_lon"], 0)
-            log(f"回退到内置坐标 {loc[0]:.4f},{loc[1]:.4f}")
 
-    lat, lon, acc = loc
     now = datetime.datetime.now().astimezone()
-    sunrise, sunset = local_sun_times(lat, lon, now)
+    if loc:
+        lat, lon, acc = loc
+        sunrise, sunset = local_sun_times(lat, lon, now)
+        loc_desc = f"坐标 {lat:.4f},{lon:.4f} (精度{acc:.0f}m)"
+    else:
+        log("定位失败, 使用固定切换时间 08:00 / 20:00")
+        sunrise = now.replace(hour=FALLBACK_LIGHT_HOUR, minute=0, second=0, microsecond=0)
+        sunset = now.replace(hour=FALLBACK_DARK_HOUR, minute=0, second=0, microsecond=0)
+        loc_desc = "固定时间 08:00/20:00"
+
     is_day = sunrise <= now <= sunset
     desired_mode = "light" if is_day else "dark"
-    target = cfg["light_theme"] if is_day else cfg["dark_theme"]
+
+    schedule_next_switch(sunrise, sunset, now)
 
     cur_mode = current_theme_mode()
-    state = ""
-    try:
-        with open(STATE_FILE) as f:
-            state = f.read().strip()
-    except OSError:
-        pass
+    cur_name = current_theme_name()
 
-    log(f"坐标 {lat:.4f},{lon:.4f} (精度{acc:.0f}m) | 日出 {sunrise:%H:%M} 日落 {sunset:%H:%M} "
-        f"| 现在={'白天' if is_day else '夜晚'} 当前={cur_mode} 状态={state or '-'}")
+    # 采纳用户手动选择的主题为新默认 (模式正确且主题不同时)
+    if cur_name and cur_mode in ("light", "dark"):
+        if cur_mode == "light" and cur_name != cfg["light_theme"]:
+            save_theme_default("light_theme", cur_name)
+            cfg["light_theme"] = cur_name
+        elif cur_mode == "dark" and cur_name != cfg["dark_theme"]:
+            save_theme_default("dark_theme", cur_name)
+            cfg["dark_theme"] = cur_name
+
+    target = cfg["light_theme"] if is_day else cfg["dark_theme"]
+
+    log(f"{loc_desc} | 日出 {sunrise:%H:%M} 日落 {sunset:%H:%M} "
+        f"| 现在={'白天' if is_day else '夜晚'} 当前={cur_mode}")
 
     if cur_mode == "unknown":
         return
 
-    if cur_mode != desired_mode and state != desired_mode:
+    if cur_mode != desired_mode:
         log(f"切换主题: {target} ({desired_mode})")
         r = subprocess.run(["omarchy", "theme", "set", target],
                            capture_output=True, text=True, timeout=60)
         if r.returncode == 0:
-            with open(STATE_FILE, "w") as f:
-                f.write(desired_mode)
             log("切换完成")
         else:
             log(f"切换失败: {r.stderr.strip()[:200]}")

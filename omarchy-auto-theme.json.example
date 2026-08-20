@@ -1,8 +1,6 @@
 {
   "//": "示例配置: 复制到 ~/.config/omarchy-auto-theme.json 使用",
-  "//说明": "lat/lon: 手动指定坐标(推荐, 比 IP 定位准); 留空则自动定位",
-  "fallback_lat": 22.3185,
-  "fallback_lon": 114.1755,
-  "light_theme": "Catppuccin Latte",
-  "dark_theme": "Tokyo Night"
+  "//说明": "lat/lon: 手动指定坐标(推荐); 留空则自动定位",
+  "light_theme": "Milkmatcha Light",
+  "dark_theme": "City 783"
 }
