@@ -5,6 +5,24 @@
 白天使用浅色主题, 夜晚使用深色主题。基于 NOAA 太阳算法计算每天的真实日出日落时间,
 由 systemd 用户定时器、hypridle 钩子与日出日落边界定时触发, 仅在明暗不一致时切换主题。
 
+## 安装
+
+### 方式一：Omarchy 插件（推荐，无需 root）
+
+```bash
+omarchy plugin add https://github.com/jfdnet/omarchy-auto-theme.git --enable
+```
+
+插件会接管 systemd 用户单元（`~/.config/systemd/user/omarchy-auto-theme.{service,timer}`），
+启用即生效，禁用插件时自动停用并移除单元文件。若此前装过独立包（`/usr/local/bin`），
+可以保留它继续给 hypridle 钩子用，也可以卸载（钩子找不到二进制时会无害跳过，边界切换由定时器负责）。
+
+### 方式二：独立包（AUR 风格打包）
+
+```bash
+makepkg -si        # 装到 /usr/local/bin + systemd 用户单元
+```
+
 ## 触发时机
 
 | 时机 | 机制 |

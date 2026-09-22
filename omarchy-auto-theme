@@ -228,7 +228,7 @@ def schedule_next_switch(sunrise, sunset, now):
         unit = SCHED_PREFIX + now.strftime("%Y%m%d%H%M%S")
         r = subprocess.run(
             ["systemd-run", "--user", "--on-calendar", spec,
-             "--unit", unit, "/usr/local/bin/omarchy-auto-theme"],
+             "--unit", unit, os.path.abspath(__file__)],
             capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
             log(f"已安排下次强制切换: {nxt:%Y-%m-%d %H:%M:%S}")
