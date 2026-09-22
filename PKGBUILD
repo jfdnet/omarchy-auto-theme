@@ -1,7 +1,7 @@
 # Maintainer: Jackey <jfdnet@users.noreply.github.com>
 
 pkgname=omarchy-auto-theme
-pkgver=1.1.0
+pkgver=1.2.0
 pkgrel=1
 pkgdesc="Auto-switch Omarchy light/dark theme by sunrise/sunset (NOAA solar algorithm)"
 arch=('any')
