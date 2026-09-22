@@ -35,8 +35,54 @@ CONFIG_PATHS = [
     "/etc/omarchy-auto-theme.json",
 ]
 
-LOG_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme.log")
-LOCATION_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme-location.json")
+# 定位数据属敏感信息: 状态目录 0700, 文件 0600 原子写入 + 符号链接防护
+STATE_DIR = os.path.expanduser("~/.local/state/omarchy-auto-theme")
+LOG_FILE = os.path.join(STATE_DIR, "omarchy-auto-theme.log")
+LOCATION_FILE = os.path.join(STATE_DIR, "location.json")
+LEGACY_LOG_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme.log")
+LEGACY_LOCATION_FILE = os.path.expanduser("~/.local/state/omarchy-auto-theme-location.json")
+
+
+def ensure_state_dir() -> None:
+    try:
+        os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+        os.chmod(STATE_DIR, 0o700)  # 收紧已存在目录的权限
+    except OSError:
+        pass
+
+
+def migrate_legacy_log() -> None:
+    """旧日志含历史坐标且权限宽松: 移入受保护目录并收紧为 0600。"""
+    try:
+        if os.path.exists(LEGACY_LOG_FILE):
+            ensure_state_dir()
+            target = os.path.join(STATE_DIR, "legacy.log")
+            i = 0
+            while os.path.exists(target):
+                i += 1
+                target = os.path.join(STATE_DIR, f"legacy-{i}.log")
+            os.rename(LEGACY_LOG_FILE, target)
+            os.chmod(target, 0o600)
+    except OSError:
+        pass
+
+
+def secure_write(path: str, data: str) -> None:
+    """0600 原子写入 (临时文件 + rename), O_NOFOLLOW 防符号链接替换。"""
+    ensure_state_dir()
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(data)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def load_config() -> dict:
@@ -57,7 +103,10 @@ def log(msg: str) -> None:
     line = f"[{ts}] {msg}"
     print(line, flush=True)
     try:
-        with open(LOG_FILE, "a") as f:
+        ensure_state_dir()
+        fd = os.open(LOG_FILE,
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "a") as f:
             f.write(line + "\n")
     except OSError:
         pass
@@ -112,21 +161,30 @@ def geoclue_locate() -> tuple | None:
 
 
 def load_location() -> tuple | None:
-    try:
-        with open(LOCATION_FILE) as f:
-            d = json.load(f)
+    for path in (LOCATION_FILE, LEGACY_LOCATION_FILE):
+        try:
+            with open(path) as f:
+                d = json.load(f)
             if "lat" in d and "lon" in d:
+                if path == LEGACY_LOCATION_FILE:
+                    # 迁移到受保护路径并移除旧的宽松权限文件
+                    save_location(float(d["lat"]), float(d["lon"]), d.get("acc", 0))
+                    try:
+                        os.unlink(LEGACY_LOCATION_FILE)
+                    except OSError:
+                        pass
                 return (float(d["lat"]), float(d["lon"]), d.get("acc", 0))
-    except (OSError, ValueError):
+        except (OSError, ValueError):
+            continue
         pass
     return None
 
 
 def save_location(lat, lon, acc):
     try:
-        with open(LOCATION_FILE, "w") as f:
-            json.dump({"lat": lat, "lon": lon, "acc": acc,
-                       "time": datetime.datetime.now().isoformat()}, f)
+        payload = json.dumps({"lat": lat, "lon": lon, "acc": acc,
+                              "time": datetime.datetime.now().isoformat()})
+        secure_write(LOCATION_FILE, payload + "\n")
     except OSError as e:
         log(f"保存坐标失败: {e}")
 
@@ -247,7 +305,7 @@ def main():
         loc = geoclue_locate()
         if loc:
             save_location(*loc)
-            log(f"坐标已更新: lat={loc[0]:.4f} lon={loc[1]:.4f} 精度={loc[2]:.0f}m")
+            log(f"坐标已更新 (精度{loc[2]:.0f}m)")
         else:
             log("定位失败, 保留原坐标")
         return
@@ -256,23 +314,23 @@ def main():
     loc = None
     if "lat" in cfg and "lon" in cfg:
         loc = (float(cfg["lat"]), float(cfg["lon"]), 0)
-        log(f"使用配置坐标 {loc[0]:.4f},{loc[1]:.4f}")
+        log("使用配置坐标 (数值不记录)")
     if not loc:
         loc = load_location()
         if loc:
-            log(f"使用缓存坐标 {loc[0]:.4f},{loc[1]:.4f} (精度{loc[2]:.0f}m)")
+            log(f"使用缓存坐标 (精度{loc[2]:.0f}m)")
     if not loc:
         log("无坐标, 尝试 geoclue 定位 (如弹出授权窗口请点 Allow)...")
         loc = geoclue_locate()
         if loc:
             save_location(*loc)
-            log(f"geoclue 定位: lat={loc[0]:.4f} lon={loc[1]:.4f} 精度={loc[2]:.0f}m")
+            log(f"geoclue 定位成功 (精度{loc[2]:.0f}m)")
 
     now = datetime.datetime.now().astimezone()
     if loc:
         lat, lon, acc = loc
         sunrise, sunset = local_sun_times(lat, lon, now)
-        loc_desc = f"坐标 {lat:.4f},{lon:.4f} (精度{acc:.0f}m)"
+        loc_desc = f"已定位 (精度{acc:.0f}m)"
     else:
         log("定位失败, 使用固定切换时间 08:00 / 20:00")
         sunrise = now.replace(hour=FALLBACK_LIGHT_HOUR, minute=0, second=0, microsecond=0)
@@ -315,4 +373,5 @@ def main():
 
 
 if __name__ == "__main__":
+    migrate_legacy_log()
     main()

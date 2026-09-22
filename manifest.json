@@ -2,11 +2,13 @@
   "schemaVersion": 1,
   "id": "io.github.jfdnet.auto-theme",
   "name": "Omarchy Auto Theme",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "jfdnet",
   "license": "MIT",
   "description": "Switch Omarchy light/dark theme automatically at sunrise and sunset. Location via config, cache or geoclue (fixed 08:00/20:00 fallback); self-schedules via transient systemd timers; learns your manually picked themes per mode.",
-  "kinds": ["service"],
+  "kinds": [
+    "service"
+  ],
   "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml"
