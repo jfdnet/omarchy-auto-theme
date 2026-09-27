@@ -14,7 +14,7 @@ optdepends=(
     'geoclue: geoclue automatic location'
 )
 source=("https://github.com/jfdnet/omarchy-auto-theme/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('660edea826f1fa28f4a5e7596141232d1e1f3bbb62a74900082f84ff576c1039')
+sha256sums=('35b5a9a44bf6b237e7d09cddf178c3887fa90c5229b702bbb1d446dcd3be5787')
 
 package() {
     cd "$srcdir/omarchy-auto-theme-$pkgver"
