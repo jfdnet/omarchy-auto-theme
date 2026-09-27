@@ -50,6 +50,7 @@ general {
 - ✍️ 手动更改主题会被采纳为新默认 (light/dark 分别记忆)
 - 📍 多种定位方式: 配置坐标 > 缓存 > geoclue > 固定时间回退
 - 🔁 幂等切换(仅明暗不一致时切换)
+- 🖱️ 光标主题可跟随明暗切换(可选, 默认关闭)
 - 📝 完整日志(`~/.local/state/omarchy-auto-theme.log`)
 
 ## 安装
@@ -78,8 +79,10 @@ systemctl --user enable --now omarchy-auto-theme.timer
   "lat": 39.9042,             // 手动指定纬度 (可选, 推荐)
   "lon": 116.4074,            // 手动指定经度 (可选, 推荐)
   "light_theme": "Milkmatcha Light",
-  "dark_theme": "City 783"
-}
+  "dark_theme": "City 783",
+  "light_cursor": "",            // 可选: 白天光标主题(需已安装; 留空不启用)
+  "dark_cursor": "",             // 可选: 夜晚光标主题
+  "cursor_size": 24              // 可选: 光标尺寸
 ```
 
 手动更改主题时, 脚本会自动把你选择的主题写入该配置文件, 作为新的 `light_theme` 或 `dark_theme` 默认。

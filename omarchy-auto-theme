@@ -24,6 +24,11 @@ import sys
 DEFAULT_CONFIG = {
     "light_theme": "Milkmatcha Light",
     "dark_theme": "City 783",
+    # 光标主题跟随明暗模式 (可选)。默认关闭: 置空不生效。
+    # 在 ~/.config/omarchy-auto-theme.json 里填本机实际存在的光标主题名。
+    "light_cursor": "",
+    "dark_cursor": "",
+    "cursor_size": 24,
 }
 
 # 定位失败时的固定切换时间 (时)
@@ -239,6 +244,29 @@ def current_theme_name():
         return None
 
 
+def apply_cursor(mode: str, cfg: dict) -> None:
+    """光标主题跟随明暗模式 (幂等: 每次运行都对齐, 不依赖主题是否切换)。"""
+    theme = cfg.get(f"{mode}_cursor")
+    if not theme:
+        return
+    size = str(cfg.get("cursor_size", 24))
+    try:
+        r = subprocess.run(["hyprctl", "setcursor", theme, size],
+                           capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            log(f"光标已对齐: {theme} ({size})")
+        else:
+            log(f"光标切换失败: {r.stderr.strip()[:120]}")
+    except Exception as e:
+        log(f"光标切换异常: {e}")
+    try:
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.interface",
+                        "cursor-theme", theme],
+                       capture_output=True, timeout=15)
+    except Exception as e:
+        log(f"gsettings 光标异常: {e}")
+
+
 def save_theme_default(mode_key: str, theme_name: str) -> None:
     """把用户手动选择的主题写入用户配置文件, 作为脚本默认主题。"""
     cfg = {}
@@ -341,6 +369,9 @@ def main():
     desired_mode = "light" if is_day else "dark"
 
     schedule_next_switch(sunrise, sunset, now)
+
+    # 光标随明暗模式对齐 (幂等, 不受主题是否切换影响)
+    apply_cursor(desired_mode, cfg)
 
     cur_mode = current_theme_mode()
     cur_name = current_theme_name()

@@ -2,5 +2,9 @@
   "//": "示例配置: 复制到 ~/.config/omarchy-auto-theme.json 使用",
   "//说明": "lat/lon: 手动指定坐标(推荐); 留空则自动定位",
   "light_theme": "Milkmatcha Light",
-  "dark_theme": "City 783"
+  "dark_theme": "City 783",
+  "//光标": "可选: 光标主题跟随明暗切换。填本机已安装的光标主题名; 留空(默认)不启用",
+  "light_cursor": "",
+  "dark_cursor": "",
+  "cursor_size": 24
 }
