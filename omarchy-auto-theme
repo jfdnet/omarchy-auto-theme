@@ -399,8 +399,35 @@ def main():
                            capture_output=True, text=True, timeout=60)
         if r.returncode == 0:
             log("切换完成")
+            ensure_shell_theme_applied()
         else:
             log(f"切换失败: {r.stderr.strip()[:200]}")
+
+
+def ensure_shell_theme_applied(retries: int = 15, delay: float = 2.0) -> None:
+    """omarchy theme set 对运行中 shell 的 IPC 推送是 best-effort(失败静默),
+    且 ShellColor 的 FileView watchChanges: false —— 推送丢失时活 shell 永远
+    停在旧主题(登录竞态: shell 刚启动 IPC 未就绪). 这里显式重试 applyTheme
+    直到 shell 应答, 兜底整条通知链."""
+    import base64, time
+    theme_dir = os.path.expanduser("~/.local/state/omarchy/current/theme")
+    colors = os.path.join(theme_dir, "colors.toml")
+    shell_toml = os.path.join(theme_dir, "shell.toml")
+    if not os.path.isfile(colors):
+        return
+    colors_b64 = base64.b64encode(open(colors, "rb").read()).decode()
+    shell_b64 = (base64.b64encode(open(shell_toml, "rb").read()).decode()
+                 if os.path.isfile(shell_toml) else "")
+    for i in range(retries):
+        r = subprocess.run(["omarchy-shell", "shell", "applyTheme",
+                            colors_b64, shell_b64],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            if i > 0:
+                log(f"shell 主题推送第 {i+1} 次尝试后送达")
+            return
+        time.sleep(delay)
+    log("shell 主题推送未送达(shell IPC 未就绪?), 下次 shell 重启时自然对齐")
 
 
 if __name__ == "__main__":
