@@ -418,16 +418,28 @@ def ensure_shell_theme_applied(retries: int = 15, delay: float = 2.0) -> None:
     colors_b64 = base64.b64encode(open(colors, "rb").read()).decode()
     shell_b64 = (base64.b64encode(open(shell_toml, "rb").read()).decode()
                  if os.path.isfile(shell_toml) else "")
+    sent = False
     for i in range(retries):
         r = subprocess.run(["omarchy-shell", "shell", "applyTheme",
                             colors_b64, shell_b64],
                            capture_output=True, text=True, timeout=5)
         if r.returncode == 0:
-            if i > 0:
-                log(f"shell 主题推送第 {i+1} 次尝试后送达")
-            return
+            sent = True
+            break
         time.sleep(delay)
-    log("shell 主题推送未送达(shell IPC 未就绪?), 下次 shell 重启时自然对齐")
+    if not sent:
+        log("shell 主题推送未送达(shell IPC 未就绪?), 下次 shell 重启时自然对齐")
+        return
+    if i > 0:
+        log(f"shell 主题推送第 {i+1} 次尝试后送达")
+    # 双发保险: omarchy 4.5 的 applyTheme 走 background 服务的 pendingTheme
+    # 代理, 长寿命 shell 上该机制会假成功(rc=0 但不落地, 实测 13:03 切光
+    # 后 shell/壁纸停留暗色直到重启)。2 秒后重发一次, 概率性解开 pending
+    # 状态; 幂等无害。
+    time.sleep(2)
+    subprocess.run(["omarchy-shell", "shell", "applyTheme",
+                    colors_b64, shell_b64],
+                   capture_output=True, text=True, timeout=5)
 
 
 if __name__ == "__main__":
