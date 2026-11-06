@@ -449,12 +449,12 @@ def wallpaper_brightness() -> float | None:
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
             path = f.name
-        r = subprocess.run(["grim", "-o", "ALL", path],
+        r = subprocess.run(["grim", path],
                            capture_output=True, timeout=5)
         if r.returncode != 0:
             return None
         out = subprocess.run(["magick", path, "-resize", "64x40",
-                              "-colorspace", "Gray", "format:", "%[mean]",
+                              "-colorspace", "Gray", "-format", "%[mean]",
                               "info:"], capture_output=True, text=True,
                              timeout=5).stdout.strip()
         os.unlink(path)
