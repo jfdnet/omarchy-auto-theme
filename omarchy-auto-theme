@@ -400,6 +400,7 @@ def main():
         if r.returncode == 0:
             log("切换完成")
             ensure_shell_theme_applied()
+            verify_and_revive(desired_mode)
         else:
             log(f"切换失败: {r.stderr.strip()[:200]}")
 
@@ -440,6 +441,45 @@ def ensure_shell_theme_applied(retries: int = 15, delay: float = 2.0) -> None:
     subprocess.run(["omarchy-shell", "shell", "applyTheme",
                     colors_b64, shell_b64],
                    capture_output=True, text=True, timeout=5)
+
+
+def wallpaper_brightness() -> float | None:
+    """主屏全屏截图平均亮度(0-255)。magick identify %[mean] 返回 0-65535。"""
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        r = subprocess.run(["grim", "-o", "ALL", path],
+                           capture_output=True, timeout=5)
+        if r.returncode != 0:
+            return None
+        out = subprocess.run(["magick", path, "-resize", "64x40",
+                              "-colorspace", "Gray", "format:", "%[mean]",
+                              "info:"], capture_output=True, text=True,
+                             timeout=5).stdout.strip()
+        os.unlink(path)
+        return float(out) / 65535 * 255 if out else None
+    except Exception:
+        return None
+
+
+def verify_and_revive(expected_mode: str) -> None:
+    """壁纸实渲染亮度 vs 期望模式, 失配则重启 shell 自动复活(omarchy#17531
+    的 wedge 只有 shell 重启能解)。亮度阈值 145: 实测 latte 壁纸 ~226,
+    暗色壁纸 ~87, 双峰分布中间无样本。全屏暗色窗口可能误判 —— 每次切换
+    至多重启一次, 不循环。"""
+    bright = wallpaper_brightness()
+    if bright is None:
+        log("壁纸亮度探测失败, 跳过验证")
+        return
+    expect_bright = expected_mode == "light"
+    matches = (bright > 145) == expect_bright
+    log(f"壁纸实渲染亮度 {bright:.0f} vs 期望 {'亮' if expect_bright else '暗'}"
+        f" → {'一致' if matches else 'SHELL WEDGE! 自动重启 shell 复活'}")
+    if not matches:
+        subprocess.run(["omarchy", "restart", "shell"],
+                       capture_output=True, timeout=30)
+        log("shell 已重启复活, 主题从状态文件自然对齐")
 
 
 if __name__ == "__main__":
